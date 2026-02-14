@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 import pandas as pd
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
@@ -6,21 +5,14 @@ from sklearn.pipeline import Pipeline
 from sklearn.compose import ColumnTransformer
 from sklearn.preprocessing import OneHotEncoder
 from sklearn.metrics import accuracy_score, classification_report
+from sklearn.utils import resample
 import pickle
 import os
 
-# Read the csv using pandas
+# Read the csv
 df = pd.read_csv("data.csv")
+print("Original data shape:", df.shape)
 print(df.head())
-print(df.info())
-
-# Check for null values
-print("\nNull values:")
-print(df.isnull().sum())
-
-# Look at distribution
-print("\nData description:")
-print(df.describe())
 
 # Define features and target
 categorical_cols = ["Platform", "Content_Type", "Target_Age", "Target_Gender", "Region"]
@@ -28,18 +20,44 @@ numerical_cols = ["Budget", "Duration"]
 feature_cols = numerical_cols + categorical_cols
 target_col = "Success"
 
-# Select only the columns we need
-X = df[feature_cols]
-y = df[target_col]
+print("\nOriginal class distribution:")
+print(df[target_col].value_counts())
+print(df[target_col].value_counts(normalize=True))
 
-print("\nFeatures being used:", feature_cols)
+# BALANCE THE DATASET
+df_success = df[df[target_col] == 1]
+df_fail = df[df[target_col] == 0]
 
-# Check class distribution
-print("\nClass distribution:")
-print(y.value_counts())
-print(y.value_counts(normalize=True))
+print(f"\nOriginal: {len(df_success)} successful, {len(df_fail)} unsuccessful")
 
-# Split Data into Train and Test Sets with stratification
+# Downsample majority class to match minority class * 2
+target_size = min(len(df_fail) * 2, len(df_success))
+
+df_success_downsampled = resample(df_success,
+                                  replace=False,
+                                  n_samples=target_size,
+                                  random_state=42)
+
+# Upsample minority class
+df_fail_upsampled = resample(df_fail,
+                             replace=True,
+                             n_samples=target_size // 2,
+                             random_state=42)
+
+# Combine
+df_balanced = pd.concat([df_success_downsampled, df_fail_upsampled])
+df_balanced = df_balanced.sample(frac=1, random_state=42).reset_index(drop=True)
+
+print(f"\nBalanced: {len(df_balanced)} total campaigns")
+print("\nBalanced class distribution:")
+print(df_balanced[target_col].value_counts())
+print(df_balanced[target_col].value_counts(normalize=True))
+
+# Select features
+X = df_balanced[feature_cols]
+y = df_balanced[target_col]
+
+# Split
 X_train, X_test, y_train, y_test = train_test_split(
     X, y, test_size=0.2, random_state=42, stratify=y
 )
@@ -51,142 +69,75 @@ preprocessor = ColumnTransformer(
         ('cat', OneHotEncoder(drop='first', sparse_output=False, handle_unknown='ignore'), 
          categorical_cols)
     ],
-    remainder='drop'  # Drop any other columns
+    remainder='drop'
 )
 
-# Create pipeline with preprocessing and model
+# Create pipeline with better settings
 pipeline = Pipeline([
     ('preprocessor', preprocessor),
     ('classifier', RandomForestClassifier(
-        n_estimators=100, 
+        n_estimators=200,
         random_state=42,
-        class_weight='balanced',
-        max_depth=10,
-        min_samples_split=20
+        class_weight=None,  # Already balanced data
+        max_depth=15,
+        min_samples_split=10,
+        min_samples_leaf=4,
+        max_features='sqrt'
     ))
 ])
 
-# Train pipeline
-print("\nTraining pipeline...")
+# Train
+print("\nTraining balanced pipeline...")
 pipeline.fit(X_train, y_train)
 
-# Model evaluation
+# Evaluate
 y_pred = pipeline.predict(X_test)
 print("\nAccuracy on test set:", accuracy_score(y_test, y_pred))
-print("\nClassification Report:\n", classification_report(y_test, y_pred))
+print("\nClassification Report:")
+print(classification_report(y_test, y_pred))
 
-# Check prediction distribution
 print("\nPrediction distribution on test set:")
-print(pd.Series(y_pred).value_counts())
+pred_dist = pd.Series(y_pred).value_counts()
+print(pred_dist)
+print("\nPercentages:")
+print(pred_dist / len(y_pred) * 100)
 
-# Save pipeline
+# Save
 os.makedirs('dependencies', exist_ok=True)
 pipeline_path = os.path.join('dependencies', 'roi_pipeline.pkl')
 
 with open(pipeline_path, 'wb') as f:
     pickle.dump(pipeline, f)
 
-print(f"\n✅ Pipeline saved as {pipeline_path}")
-print("✅ Ready to integrate with Flask backend!")
+print(f"\nPipeline saved as {pipeline_path}")
+print("Ready to use with Flask!")
 
-# Test the pipeline with sample data
-print("\n--- Testing Pipeline ---")
-test_sample = pd.DataFrame([{
-    'Budget': 25000,
-    'Duration': 30,
-    'Platform': 'Instagram',
-    'Content_Type': 'Video',
-    'Target_Age': '25-34',
-    'Target_Gender': 'Female',
-    'Region': 'US'
-}])
+# Test with diverse samples
+print("\n" + "="*60)
+print("TESTING WITH DIFFERENT CAMPAIGNS")
+print("="*60)
 
-prediction = pipeline.predict(test_sample)[0]
-probability = pipeline.predict_proba(test_sample)[0]
+test_samples = pd.DataFrame([
+    {'Budget': 5000, 'Duration': 7, 'Platform': 'TikTok', 'Content_Type': 'Video', 
+     'Target_Age': '18-24', 'Target_Gender': 'All', 'Region': 'India'},
+    {'Budget': 50000, 'Duration': 60, 'Platform': 'Google', 'Content_Type': 'Text', 
+     'Target_Age': '35-44', 'Target_Gender': 'All', 'Region': 'US'},
+    {'Budget': 25000, 'Duration': 30, 'Platform': 'Instagram', 'Content_Type': 'Story', 
+     'Target_Age': '25-34', 'Target_Gender': 'Female', 'Region': 'UK'},
+    {'Budget': 15000, 'Duration': 14, 'Platform': 'Facebook', 'Content_Type': 'Image', 
+     'Target_Age': '45-54', 'Target_Gender': 'Male', 'Region': 'Canada'},
+])
 
-print(f"Test prediction: {prediction}")
-print(f"Recommendation: {'Invest' if prediction == 1 else 'Avoid'}")
-print(f"Confidence: {probability[prediction] * 100:.2f}%")
-=======
-import pandas as pd
-from sklearn.model_selection import train_test_split
-from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
-from sklearn.preprocessing import LabelEncoder
-from sklearn.metrics import accuracy_score, classification_report, mean_squared_error, r2_score
+predictions = pipeline.predict(test_samples)
+probabilities = pipeline.predict_proba(test_samples)
 
+for i in range(len(test_samples)):
+    print(f"\nCampaign {i+1}: {test_samples.iloc[i]['Platform']}, ${test_samples.iloc[i]['Budget']}, {test_samples.iloc[i]['Duration']} days")
+    print(f"  Prediction: {'SUCCESS (Invest)' if predictions[i] == 1 else 'FAIL (Avoid)'}")
+    print(f"  Confidence: {probabilities[i][predictions[i]] * 100:.1f}%")
 
-# read the csv using pandas
-df = pd.read_csv("data.csv")
-print(df.head())
-print(df.info())
-
-#  check for null values
-print(df.isnull().sum())
-
-# Look at distribution of key columns like Clicks, Conversions, Budget:
-print(df.describe())
-
-# data preprocessing
-    # Convert categorical columns into numbers: using one hot encoding
-categorical_cols = ["Platform", "Content_Type", "Target_Gender", "Region","Target_Age"]
-df = pd.get_dummies(df, columns=categorical_cols)
-
-    # deciding target  and features
-target_col = "Success"
-
-# Remove features that are calculated FROM or directly determine the Success label
-leaky_features = ['CTR', 'CPC', 'Conversion_Rate', 'Clicks', 'Conversions']
-
-X = df.drop(columns=["Campaign_ID", target_col] + leaky_features)
-y = df[target_col]
-
-print("Features being used:", X.columns.tolist())
-
-# Check class distribution
-print("\nClass distribution:")
-print(y.value_counts())
-print(y.value_counts(normalize=True))
-
-# Split Data into Train and Test Sets with stratification
-X_train, X_test, y_train, y_test = train_test_split(
-    X, y, test_size=0.2, random_state=42, stratify=y
-)
-
-# Training Model with class balancing
-model = RandomForestClassifier(
-    n_estimators=100, 
-    random_state=42,
-    class_weight='balanced'
-)
-model.fit(X_train, y_train)
-
-# Model evaluation
-y_pred = model.predict(X_test)
-print("\nAccuracy on test set:", accuracy_score(y_test, y_pred))
-print("\nClassification Report:\n", classification_report(y_test, y_pred))
-
-# Check prediction distribution
-print("\nPrediction distribution on test set:")
-print(pd.Series(y_pred).value_counts())
-
-# Recommendations
-    # Add predictions and recommendations to dataframe
-df["Predicted_Success"] = model.predict(X)
-df["Recommendation"] = ["Invest" if pred == 1 else "Avoid" for pred in df["Predicted_Success"]]
-
-# Showing first 10 campaigns with predictions
-print("\nSample Recommendations:")
-print(df[["Campaign_ID", "Predicted_Success", "Recommendation"]].head(20))
-
-# Show prediction distribution on full dataset
-print("\nFull dataset prediction distribution:")
-print(df["Predicted_Success"].value_counts())
-print(df["Recommendation"].value_counts())
-
-#   Saving Model for Backend Integration
-import pickle
-with open("roi_model.pkl", "wb") as f:
-    pickle.dump(model, f)
-
-print("\nModel saved as roi_model.pkl. Ready to integrate with website backend.")
->>>>>>> cfca9b5308dc58eb825b7088b636af14894912aa
+print("\n" + "="*60)
+success_count = predictions.sum()
+print(f"Results: {success_count}/4 predicted successful")
+print("If you see VARIED predictions above, the model is working well!")
+print("="*60)

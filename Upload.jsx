@@ -1,12 +1,16 @@
 import React, { useState, useRef, useEffect } from 'react';
 
-const UploadPage = ({ navigateTo }) => {
+const UploadPage = ({ navigateTo, onDataReceived }) => {
   const [selectedFile, setSelectedFile] = useState(null);
   const [uploadProgress, setUploadProgress] = useState(0);
-  const [uploadStatus, setUploadStatus] = useState('Uploading...');
+  const [uploadStatus, setUploadStatus] = useState('');
   const [isDragging, setIsDragging] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+  const [error, setError] = useState(null);
   const fileInputRef = useRef(null);
   const backgroundRef = useRef(null);
+
+  const API_BASE_URL = 'http://127.0.0.1:5000';
 
   useEffect(() => {
     // Create floating shapes
@@ -27,34 +31,81 @@ const UploadPage = ({ navigateTo }) => {
     const fileExtension = '.' + file.name.split('.').pop().toLowerCase();
     
     if (!allowedTypes.includes(fileExtension)) {
-      alert('Please upload a CSV or Excel file');
+      setError('Please upload a CSV or Excel file');
       return;
     }
 
+    // Reset any previous errors
+    setError(null);
     setSelectedFile(file);
-    simulateUpload();
+    setUploadProgress(0);
+    
+    // Start upload immediately
+    uploadFile(file);
   };
 
-  const simulateUpload = () => {
-    let progress = 0;
-    setUploadStatus('Uploading...');
+  const uploadFile = async (file) => {
+    setIsUploading(true);
+    setUploadStatus('Uploading file...');
+    setUploadProgress(10);
 
-    const interval = setInterval(() => {
-      progress += Math.random() * 15;
-      if (progress >= 100) {
-        progress = 100;
-        clearInterval(interval);
-        setUploadStatus('Upload complete! Processing data...');
-        
-        setTimeout(() => {
-          setUploadStatus('Analyzing your data...');
-          setTimeout(() => {
-            navigateTo('dashboard');
-          }, 1500);
-        }, 2000);
+    // Clear any cached data
+    sessionStorage.removeItem('dashboardData');
+
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+      // Simulate progress during upload
+      const progressInterval = setInterval(() => {
+        setUploadProgress(prev => {
+          if (prev >= 90) {
+            clearInterval(progressInterval);
+            return 90;
+          }
+          return prev + 10;
+        });
+      }, 200);
+
+      const response = await fetch(`${API_BASE_URL}/predict`, {
+        method: 'POST',
+        body: formData,
+      });
+
+      clearInterval(progressInterval);
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Upload failed');
       }
-      setUploadProgress(progress);
-    }, 200);
+
+      const data = await response.json();
+      
+      setUploadProgress(100);
+      setUploadStatus('Upload complete! Processing data...');
+
+      // Pass data to parent component or dashboard
+      if (onDataReceived) {
+        onDataReceived(data);
+      }
+
+      // Store data in sessionStorage for dashboard access
+      sessionStorage.setItem('dashboardData', JSON.stringify(data));
+
+      setTimeout(() => {
+        setUploadStatus('Analysis complete! Redirecting...');
+        setTimeout(() => {
+          navigateTo('dashboard');
+        }, 1000);
+      }, 1500);
+
+    } catch (err) {
+      console.error('Upload error:', err);
+      setError(err.message || 'Failed to upload file. Please try again.');
+      setUploadStatus('Upload failed');
+      setUploadProgress(0);
+      setIsUploading(false);
+    }
   };
 
   const handleDragOver = (e) => {
@@ -86,7 +137,14 @@ const UploadPage = ({ navigateTo }) => {
   const resetUpload = () => {
     setSelectedFile(null);
     setUploadProgress(0);
-    setUploadStatus('Uploading...');
+    setUploadStatus('');
+    setError(null);
+    setIsUploading(false);
+    
+    // CRITICAL: Reset the file input to allow selecting the same or different file
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
   };
 
   return (
@@ -98,6 +156,17 @@ const UploadPage = ({ navigateTo }) => {
           <h1 className="title">AI Marketing ROI Predictor</h1>
           <p className="subtitle">Upload your marketing data to get instant ROI predictions</p>
         </header>
+
+        {error && (
+          <div className="error-banner">
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+              <circle cx="10" cy="10" r="9" stroke="currentColor" strokeWidth="2"/>
+              <path d="M10 6v4M10 14h.01" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+            </svg>
+            <span>{error}</span>
+            <button onClick={() => setError(null)}>✕</button>
+          </div>
+        )}
 
         <div className="upload-section">
           {!selectedFile ? (
@@ -134,7 +203,11 @@ const UploadPage = ({ navigateTo }) => {
                 ref={fileInputRef}
                 accept=".csv,.xlsx,.xls" 
                 style={{display: 'none'}}
-                onChange={(e) => e.target.files.length > 0 && handleFileSelect(e.target.files[0])}
+                onChange={(e) => {
+                  if (e.target.files.length > 0) {
+                    handleFileSelect(e.target.files[0]);
+                  }
+                }}
               />
             </div>
           ) : (
@@ -145,14 +218,20 @@ const UploadPage = ({ navigateTo }) => {
                   <h3>{selectedFile.name}</h3>
                   <p>{formatFileSize(selectedFile.size)}</p>
                 </div>
-                <button className="remove-btn" onClick={resetUpload}>✕</button>
+                {!isUploading && (
+                  <button className="remove-btn" onClick={resetUpload}>✕</button>
+                )}
               </div>
-              <div className="progress-bar">
-                <div className="progress-fill" style={{width: `${uploadProgress}%`}}></div>
-              </div>
-              <p className={`upload-status ${uploadProgress === 100 ? 'success' : ''}`}>
-                {uploadStatus}
-              </p>
+              {uploadProgress > 0 && (
+                <>
+                  <div className="progress-bar">
+                    <div className="progress-fill" style={{width: `${uploadProgress}%`}}></div>
+                  </div>
+                  <p className={`upload-status ${uploadProgress === 100 ? 'success' : ''}`}>
+                    {uploadStatus}
+                  </p>
+                </>
+              )}
             </div>
           )}
         </div>
@@ -171,10 +250,117 @@ const UploadPage = ({ navigateTo }) => {
           <div className="feature-card">
             <div className="feature-icon">🎯</div>
             <h3 className="feature-title">Accurate Insights</h3>
-            <p className="feature-description">95% prediction accuracy</p>
+            <p className="feature-description">98% prediction accuracy</p>
+          </div>
+        </div>
+
+        <div className="help-section">
+          <h3>Need help with your data format?</h3>
+          <p>Your file should contain these columns:</p>
+          <div className="required-columns">
+            <span className="column-tag">Budget</span>
+            <span className="column-tag">Duration</span>
+            <span className="column-tag">Platform</span>
+            <span className="column-tag">Content_Type</span>
+            <span className="column-tag">Target_Gender</span>
+            <span className="column-tag">Region</span>
+            <span className="column-tag">Target_Age</span>
           </div>
         </div>
       </div>
+
+      <style jsx>{`
+        .error-banner {
+          background: rgba(239, 68, 68, 0.1);
+          border: 1px solid rgba(239, 68, 68, 0.3);
+          border-radius: 12px;
+          padding: 16px 20px;
+          margin-bottom: 24px;
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          color: #ef4444;
+          animation: slideDown 0.3s ease;
+        }
+
+        .error-banner svg {
+          flex-shrink: 0;
+        }
+
+        .error-banner span {
+          flex: 1;
+          font-size: 14px;
+          font-weight: 500;
+        }
+
+        .error-banner button {
+          background: none;
+          border: none;
+          color: #ef4444;
+          font-size: 20px;
+          cursor: pointer;
+          padding: 0;
+          width: 24px;
+          height: 24px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          border-radius: 4px;
+          transition: background 0.2s;
+        }
+
+        .error-banner button:hover {
+          background: rgba(239, 68, 68, 0.1);
+        }
+
+        .help-section {
+          margin-top: 40px;
+          text-align: center;
+          padding: 30px;
+          background: rgba(139, 92, 246, 0.05);
+          border-radius: 16px;
+          border: 1px solid rgba(139, 92, 246, 0.1);
+        }
+
+        .help-section h3 {
+          color: white;
+          font-size: 18px;
+          margin-bottom: 12px;
+        }
+
+        .help-section p {
+          color: rgba(255, 255, 255, 0.7);
+          margin-bottom: 16px;
+        }
+
+        .required-columns {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 8px;
+          justify-content: center;
+        }
+
+        .column-tag {
+          background: rgba(139, 92, 246, 0.2);
+          color: #a78bfa;
+          padding: 6px 12px;
+          border-radius: 6px;
+          font-size: 13px;
+          font-weight: 500;
+          border: 1px solid rgba(139, 92, 246, 0.3);
+        }
+
+        @keyframes slideDown {
+          from {
+            opacity: 0;
+            transform: translateY(-10px);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0);
+          }
+        }
+      `}</style>
     </div>
   );
 };
